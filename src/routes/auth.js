@@ -1,6 +1,7 @@
 import { Router } from 'express';
 
-import { loginToSap, logoutFromSap } from '../services/sapAuthService.js';
+import { login } from '../services/authService.js';
+import { logoutFromSap } from '../services/sapAuthService.js';
 
 const router = Router();
 
@@ -8,6 +9,7 @@ router.post('/login', async (req, res) => {
   try {
     const username = req.body?.username?.trim();
     const password = req.body?.password;
+    const type = req.body?.type || 'wms';
 
     if (!username || !password) {
       return res.status(400).json({
@@ -16,7 +18,7 @@ router.post('/login', async (req, res) => {
       });
     }
 
-    const result = await loginToSap({ username, password });
+    const result = await login({ username, password, type });
 
     res.json({
       success: true,
