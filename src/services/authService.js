@@ -12,6 +12,16 @@ async function connectSapSession(username, password) {
       sapUsername: username,
       companyDB: sapResult.user.companyDB
     };
+  } catch (userError) {
+    // ถ้าเป็นรหัส SAP ผิดของ user นี้ และยังไม่มี fallback บัญชีบริการตอน login SAP โดยตรง
+    // จะ throw ต่อให้ผู้เรียกจัดการ
+    throw userError;
+  }
+}
+
+async function connectSapWithFallback(username, password) {
+  try {
+    return await connectSapSession(username, password);
   } catch {
     assertSapServiceAccount();
     const sapResult = await loginToSap({
@@ -27,13 +37,43 @@ async function connectSapSession(username, password) {
 }
 
 export async function login({ username, password }) {
-  // 1) ตรวจ user จากฐานเรา WMS_DATABASE ก่อน (สำคัญสุด)
-  const wmsUser = await loginWithWmsUser({ username, password });
+  let wmsUser = null;
 
-  // 2) พยายามเข้า SAP ถ้าเปิดไว้ แต่ถ้า SAP พังก็ยังให้เข้า WMS ได้
-  if (sapEnabled) {
+  // 1) ลองฐานเรา WMS_DATABASE ก่อน
+  try {
+    wmsUser = await loginWithWmsUser({ username, password });
+  } catch (wmsError) {
+    // 2) ถ้าไม่มีในฐานเรา แต่เปิด SAP ไว้ ให้ลองเข้า SAP โดยตรง
+    if (!sapEnabled) {
+      throw wmsError;
+    }
+
     try {
       const sap = await connectSapSession(username, password);
+
+      return {
+        loginType: 'sap',
+        user: {
+          username,
+          fullName: username,
+          database: null,
+          companyDB: sap.companyDB,
+          sapUsername: sap.sapUsername
+        },
+        session: sap.session
+      };
+    } catch (sapError) {
+      console.warn('SAP login ล้มเหลว:', sapError.message);
+      const error = new Error(sapError.message || 'ชื่อผู้ใช้หรือรหัสผ่านไม่ถูกต้อง');
+      error.statusCode = sapError.statusCode || 401;
+      throw error;
+    }
+  }
+
+  // 3) มีในฐานเราแล้ว พยายามผูก SAP (ถ้าไม่ได้ยังเข้า WMS ได้)
+  if (sapEnabled) {
+    try {
+      const sap = await connectSapWithFallback(username, password);
 
       return {
         loginType: 'wms+sap',

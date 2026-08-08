@@ -46,7 +46,11 @@ router.post('/logout', async (req, res) => {
         req.body?.session?.routeId;
 
       if (sessionId && !String(sessionId).startsWith('wms-')) {
-        await logoutFromSap({ sessionId, routeId });
+        try {
+          await logoutFromSap({ sessionId, routeId });
+        } catch (sapError) {
+          console.warn('SAP logout ไม่สำเร็จ:', sapError.message);
+        }
       }
     }
 
