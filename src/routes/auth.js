@@ -1,6 +1,6 @@
 import { Router } from 'express';
 
-import { login } from '../services/authService.js';
+import { isSapEnabled, login } from '../services/authService.js';
 import { logoutFromSap } from '../services/sapAuthService.js';
 
 const router = Router();
@@ -9,7 +9,6 @@ router.post('/login', async (req, res) => {
   try {
     const username = req.body?.username?.trim();
     const password = req.body?.password;
-    const type = req.body?.type || 'wms';
 
     if (!username || !password) {
       return res.status(400).json({
@@ -18,7 +17,7 @@ router.post('/login', async (req, res) => {
       });
     }
 
-    const result = await login({ username, password, type });
+    const result = await login({ username, password });
 
     res.json({
       success: true,
@@ -35,21 +34,26 @@ router.post('/login', async (req, res) => {
 
 router.post('/logout', async (req, res) => {
   try {
-    const sessionId =
-      req.headers.b1session ||
-      req.body?.sessionId ||
-      req.body?.session?.sessionId;
+    if (isSapEnabled()) {
+      const sessionId =
+        req.headers.b1session ||
+        req.body?.sessionId ||
+        req.body?.session?.sessionId;
 
-    const routeId =
-      req.headers.routeid ||
-      req.body?.routeId ||
-      req.body?.session?.routeId;
+      const routeId =
+        req.headers.routeid ||
+        req.body?.routeId ||
+        req.body?.session?.routeId;
 
-    await logoutFromSap({ sessionId, routeId });
+      if (sessionId && !String(sessionId).startsWith('wms-')) {
+        await logoutFromSap({ sessionId, routeId });
+      }
+    }
 
     res.json({
       success: true,
-      message: 'ออกจากระบบสำเร็จ'
+      message: 'ออกจากระบบสำเร็จ',
+      sapEnabled: isSapEnabled()
     });
   } catch (error) {
     res.status(error.statusCode || 500).json({

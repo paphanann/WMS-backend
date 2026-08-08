@@ -6,12 +6,11 @@ const useWindowsAuth =
 
 const driver = useWindowsAuth ? sqlWindows : sql;
 
-const pools = {
-  main: null,
-  wms: null
-};
+let pool;
 
-function buildConfig(databaseName) {
+function buildConfig() {
+  const databaseName = process.env.DB_DATABASE || 'WMS_DATABASE';
+
   if (useWindowsAuth) {
     return {
       server: process.env.DB_SERVER,
@@ -47,30 +46,19 @@ function buildConfig(databaseName) {
   };
 }
 
-async function connectPool(key, databaseName) {
-  if (pools[key]?.connected) {
-    return pools[key];
-  }
-
-  const pool = new driver.ConnectionPool(buildConfig(databaseName));
-  pools[key] = await pool.connect();
-
-  console.log(
-    `เชื่อมต่อ SQL Server สำเร็จ (${useWindowsAuth ? 'Windows Auth' : 'SQL Auth'}) -> ${databaseName}`
-  );
-
-  return pools[key];
-}
-
 export async function connectDatabase() {
   try {
-    const mainDb = process.env.DB_DATABASE;
-    const wmsDb = process.env.WMS_DB_DATABASE || 'WMS_DATABASE';
+    if (pool?.connected) {
+      return pool;
+    }
 
-    await connectPool('main', mainDb);
-    await connectPool('wms', wmsDb);
+    pool = await new driver.ConnectionPool(buildConfig()).connect();
 
-    return pools.main;
+    console.log(
+      `เชื่อมต่อ SQL Server สำเร็จ (${useWindowsAuth ? 'Windows Auth' : 'SQL Auth'}) -> ${process.env.DB_DATABASE || 'WMS_DATABASE'}`
+    );
+
+    return pool;
   } catch (error) {
     console.error('เชื่อมต่อ SQL Server ไม่สำเร็จ:', error.message);
     throw error;
@@ -78,23 +66,19 @@ export async function connectDatabase() {
 }
 
 export function getDatabasePool() {
-  if (!pools.main?.connected) {
-    throw new Error('ยังไม่ได้เชื่อมต่อฐานข้อมูลหลัก');
+  if (!pool?.connected) {
+    throw new Error('ยังไม่ได้เชื่อมต่อฐานข้อมูล');
   }
 
-  return pools.main;
+  return pool;
 }
 
 export function getWmsDatabasePool() {
-  if (!pools.wms?.connected) {
-    throw new Error('ยังไม่ได้เชื่อมต่อฐานข้อมูล WMS');
-  }
-
-  return pools.wms;
+  return getDatabasePool();
 }
 
 export async function checkDatabase() {
-  const activePool = await connectPool('main', process.env.DB_DATABASE);
+  const activePool = await connectDatabase();
   const result = await activePool
     .request()
     .query('SELECT DB_NAME() AS databaseName, SYSTEM_USER AS loginName, GETDATE() AS serverTime');

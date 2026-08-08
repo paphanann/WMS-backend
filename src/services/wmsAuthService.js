@@ -1,9 +1,9 @@
 import sql from 'mssql';
 
-import { getWmsDatabasePool } from '../config/database.js';
+import { getDatabasePool } from '../config/database.js';
 
 export async function loginWithWmsUser({ username, password }) {
-  const pool = getWmsDatabasePool();
+  const pool = getDatabasePool();
 
   const result = await pool
     .request()
@@ -16,7 +16,7 @@ export async function loginWithWmsUser({ username, password }) {
         FullName,
         Role,
         Email
-      FROM Users
+      FROM dbo.Users
       WHERE Username = @username
     `);
 
@@ -33,6 +33,7 @@ export async function loginWithWmsUser({ username, password }) {
     username: user.Username,
     fullName: user.FullName,
     role: user.Role,
-    email: user.Email
+    email: user.Email,
+    database: process.env.DB_DATABASE || 'WMS_DATABASE'
   };
 }
