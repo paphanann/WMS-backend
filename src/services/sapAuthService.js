@@ -7,7 +7,7 @@ const httpsAgent = new https.Agent({
   rejectUnauthorized: false
 });
 
-function createSapClient(session = {}) {
+export function createSapClient(session = {}) {
   const headers = {
     'Content-Type': 'application/json'
   };
