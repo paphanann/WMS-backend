@@ -11,7 +11,8 @@ async function startServer() {
     await connectDatabase();
 
     app.listen(port, host, () => {
-      console.log(`WMS Backend running at http://localhost:${port}`);
+     // console.log(`WMS Backend running at http://localhost:${port}`);
+     console.log(`WMS Backend running at http://${host}:${port}`);
     });
   } catch (error) {
     console.error('ไม่สามารถเปิด WMS Backend ได้');
