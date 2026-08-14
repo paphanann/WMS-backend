@@ -1,25 +1,16 @@
 import axios from 'axios';
 import https from 'https';
-
 import { assertSapConfig, sapConfig } from '../config/sap.js';
 
-const httpsAgent = new https.Agent({
-  rejectUnauthorized: false
-});
+const httpsAgent = new https.Agent({ rejectUnauthorized: false });
 
 export function createSapClient(session = {}) {
-  const headers = {
-    'Content-Type': 'application/json'
-  };
+  const headers = { 'Content-Type': 'application/json' };
 
   if (session.sessionId) {
-    const cookies = [`B1SESSION=${session.sessionId}`];
-
-    if (session.routeId) {
-      cookies.push(`ROUTEID=${session.routeId}`);
-    }
-
-    headers.Cookie = cookies.join('; ');
+    let cookie = `B1SESSION=${session.sessionId}`;
+    if (session.routeId) cookie += `; ROUTEID=${session.routeId}`;
+    headers.Cookie = cookie;
   }
 
   return axios.create({
@@ -31,36 +22,27 @@ export function createSapClient(session = {}) {
   });
 }
 
-function parseCookies(setCookieHeader = []) {
-  const cookies = Array.isArray(setCookieHeader)
-    ? setCookieHeader
-    : [setCookieHeader].filter(Boolean);
-
+function parseCookies(setCookie = []) {
+  const list = Array.isArray(setCookie) ? setCookie : [setCookie].filter(Boolean);
   let sessionId = null;
   let routeId = null;
 
-  for (const cookie of cookies) {
-    const sessionMatch = cookie.match(/B1SESSION=([^;]+)/i);
-    const routeMatch = cookie.match(/ROUTEID=([^;]+)/i);
-
-    if (sessionMatch) {
-      sessionId = sessionMatch[1];
-    }
-
-    if (routeMatch) {
-      routeId = routeMatch[1];
-    }
+  for (const c of list) {
+    const s = c.match(/B1SESSION=([^;]+)/i);
+    const r = c.match(/ROUTEID=([^;]+)/i);
+    if (s) sessionId = s[1];
+    if (r) routeId = r[1];
   }
 
   return { sessionId, routeId };
 }
 
-function getSapErrorMessage(response) {
+function sapError(res, fallback) {
   return (
-    response?.data?.error?.message?.value ||
-    response?.data?.error?.message ||
-    response?.data?.message ||
-    'เข้าสู่ระบบ SAP ไม่สำเร็จ'
+    res?.data?.error?.message?.value ||
+    res?.data?.error?.message ||
+    res?.data?.message ||
+    fallback
   );
 }
 
@@ -68,56 +50,49 @@ export async function loginToSap({ username, password }) {
   assertSapConfig();
 
   const client = createSapClient();
-  const response = await client.post('/Login', {
+  const res = await client.post('/Login', {
     CompanyDB: sapConfig.companyDB,
     UserName: username,
     Password: password
   });
 
-  if (response.status < 200 || response.status >= 300) {
-    const error = new Error(getSapErrorMessage(response));
-    error.statusCode = response.status === 401 ? 401 : 400;
-    throw error;
+  if (res.status < 200 || res.status >= 300) {
+    const err = new Error(sapError(res, 'sap login failed'));
+    err.statusCode = res.status === 401 ? 401 : 400;
+    throw err;
   }
 
-  const cookieSession = parseCookies(response.headers['set-cookie']);
-  const sessionId = cookieSession.sessionId || response.data?.SessionId;
-  const routeId = cookieSession.routeId || null;
+  const cookies = parseCookies(res.headers['set-cookie']);
+  const sessionId = cookies.sessionId || res.data?.SessionId;
+  const routeId = cookies.routeId || null;
 
   if (!sessionId) {
-    const error = new Error('ไม่พบ Session จาก SAP Service Layer');
-    error.statusCode = 500;
-    throw error;
+    const err = new Error('no sap session');
+    err.statusCode = 500;
+    throw err;
   }
 
   return {
-    session: {
-      sessionId,
-      routeId
-    },
-    user: {
-      username,
-      companyDB: sapConfig.companyDB
-    }
+    session: { sessionId, routeId },
+    user: { username, companyDB: sapConfig.companyDB }
   };
 }
 
 export async function logoutFromSap({ sessionId, routeId }) {
   assertSapConfig();
-
   if (!sessionId) {
-    const error = new Error('ต้องระบุ sessionId');
-    error.statusCode = 400;
-    throw error;
+    const err = new Error('sessionId required');
+    err.statusCode = 400;
+    throw err;
   }
 
   const client = createSapClient({ sessionId, routeId });
-  const response = await client.post('/Logout');
+  const res = await client.post('/Logout');
 
-  if (response.status < 200 || response.status >= 300) {
-    const error = new Error(getSapErrorMessage(response));
-    error.statusCode = response.status === 401 ? 401 : 400;
-    throw error;
+  if (res.status < 200 || res.status >= 300) {
+    const err = new Error(sapError(res, 'sap logout failed'));
+    err.statusCode = res.status === 401 ? 401 : 400;
+    throw err;
   }
 
   return true;
