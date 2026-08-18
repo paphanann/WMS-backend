@@ -1,9 +1,10 @@
 import { requireSapSession } from '../middleware/sapAuth.js';
 import {
-  getOpenLineCounts,
+  getPoLineStats,
   getPurchaseOrderHeader,
   getPurchaseOrderLines,
-  getUserPurchaseOrders
+  getUserPurchaseOrders,
+  getWarehouseNameMap
 } from '../services/purchaseOrdersService.js';
 import { createGoodsReceiptPo, fetchPurchaseOrderFromSap } from '../services/sapPoService.js';
 
@@ -13,36 +14,37 @@ function statusOf(v) {
   return v || '';
 }
 
-function lineFromSql(r) {
+function mapLine(r) {
+  const code = r.WhsCode || r.WarehouseCode || '';
+  const name = r.WhsName || r.WarehouseName || '';
+  const open = Number(r.OpenQty ?? r.RemainingOpenQuantity ?? r.Quantity ?? 0);
   return {
     lineNum: Number(r.LineNum || 0),
     itemCode: r.ItemCode || '',
-    itemDescription: r.Dscription || '',
-    quantity: Number(r.OpenQty ?? r.Quantity ?? 0),
+    itemDescription: r.Dscription || r.ItemDescription || '',
+    quantity: open,
     orderedQuantity: Number(r.Quantity || 0),
-    openQuantity: Number(r.OpenQty || 0),
-    warehouseCode: r.WhsCode || ''
+    openQuantity: open,
+    warehouseCode: code,
+    warehouseName: name
   };
 }
 
-function lineFromSap(l) {
-  const open = Number(l.RemainingOpenQuantity ?? l.Quantity ?? 0);
-  return {
-    lineNum: Number(l.LineNum || 0),
-    itemCode: l.ItemCode || '',
-    itemDescription: l.ItemDescription || '',
-    quantity: open,
-    orderedQuantity: Number(l.Quantity || 0),
-    openQuantity: open,
-    warehouseCode: l.WarehouseCode || ''
-  };
+async function fillWhsNames(lines) {
+  const missing = lines.filter((l) => l.warehouseCode && !l.warehouseName).map((l) => l.warehouseCode);
+  if (!missing.length) return lines;
+  const names = await getWarehouseNameMap(missing);
+  for (const l of lines) {
+    if (l.warehouseCode && !l.warehouseName) l.warehouseName = names.get(l.warehouseCode) || '';
+  }
+  return lines;
 }
 
 async function loadPo(session, docEntry) {
   try {
     const sap = await fetchPurchaseOrderFromSap(session, docEntry);
     if (sap) {
-      const lines = (sap.DocumentLines || []).map(lineFromSap);
+      const lines = await fillWhsNames((sap.DocumentLines || []).map(mapLine));
       return {
         docEntry: Number(sap.DocEntry),
         docNum: String(sap.DocNum || ''),
@@ -52,7 +54,8 @@ async function loadPo(session, docEntry) {
         documentStatus: statusOf(sap.DocumentStatus),
         cancelStatus: sap.CancelStatus || '',
         lines,
-        openLineCount: lines.filter((x) => x.openQuantity > 0).length
+        openLineCount: lines.filter((x) => x.openQuantity > 0).length,
+        totalQty: lines.reduce((n, x) => n + Number(x.openQuantity || 0), 0)
       };
     }
   } catch (_) {}
@@ -61,7 +64,7 @@ async function loadPo(session, docEntry) {
   if (!h) return null;
 
   const map = await getPurchaseOrderLines([docEntry]);
-  const lines = (map.get(Number(docEntry)) || []).map(lineFromSql);
+  const lines = await fillWhsNames((map.get(Number(docEntry)) || []).map(mapLine));
 
   return {
     docEntry: Number(h.DocEntry),
@@ -72,7 +75,8 @@ async function loadPo(session, docEntry) {
     documentStatus: statusOf(h.DocStatus),
     cancelStatus: h.CANCELED === 'Y' ? 'csYes' : 'csNo',
     lines,
-    openLineCount: lines.filter((x) => x.openQuantity > 0).length
+    openLineCount: lines.filter((x) => x.openQuantity > 0).length,
+    totalQty: lines.reduce((n, x) => n + Number(x.openQuantity || 0), 0)
   };
 }
 
@@ -85,14 +89,18 @@ export function registerPurchaseOrderRoutes(app) {
       }
 
       const status = String(req.query.status || 'open').toLowerCase();
-      let rows = await getUserPurchaseOrders(username, status !== 'all' && status !== 'closed' && status !== 'c');
+      let rows = await getUserPurchaseOrders(
+        username,
+        status !== 'all' && status !== 'closed' && status !== 'c'
+      );
       if (status === 'closed' || status === 'c') {
         rows = rows.filter((r) => r.DocStatus === 'C');
       }
 
-      const counts = await getOpenLineCounts(rows.map((r) => r.DocEntry));
+      const stats = await getPoLineStats(rows.map((r) => r.DocEntry));
       const data = rows.map((r) => {
         const docEntry = Number(r.DocEntry);
+        const s = stats.get(docEntry) || { openLineCount: 0, totalQty: 0 };
         return {
           docEntry,
           docNum: String(r.DocNum || ''),
@@ -100,7 +108,8 @@ export function registerPurchaseOrderRoutes(app) {
           cardName: r.CardName || '',
           docDate: r.DocDate || null,
           documentStatus: statusOf(r.DocStatus),
-          openLineCount: counts.get(docEntry) || 0,
+          openLineCount: s.openLineCount,
+          totalQty: s.totalQty,
           lines: []
         };
       });
@@ -122,7 +131,6 @@ export function registerPurchaseOrderRoutes(app) {
       if (!data) {
         return res.status(404).json({ success: false, message: 'ไม่พบ Purchase Order' });
       }
-
       res.json({ success: true, data });
     } catch (err) {
       res.status(err.statusCode || 500).json({

@@ -4,14 +4,23 @@ function errMsg(res, fallback) {
   return res?.data?.error?.message?.value || res?.data?.error?.message || fallback;
 }
 
+function toSapDate(v) {
+  if (!v) return null;
+  const s = String(v).trim();
+  if (/^\d{4}-\d{2}-\d{2}/.test(s)) return s.slice(0, 10);
+  const m = s.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
+  if (!m) return s;
+  return `${m[3]}-${m[2].padStart(2, '0')}-${m[1].padStart(2, '0')}`;
+}
+
 export async function fetchPurchaseOrderFromSap(session, docEntry) {
   const client = createSapClient(session);
-  const url =
+  const res = await client.get(
     `/PurchaseOrders(${docEntry})` +
-    '?$select=DocEntry,DocNum,CardCode,CardName,DocDate,DocumentStatus,CancelStatus' +
-    '&$expand=DocumentLines($select=LineNum,ItemCode,ItemDescription,Quantity,RemainingOpenQuantity,WarehouseCode)';
+      '?$select=DocEntry,DocNum,CardCode,CardName,DocDate,DocumentStatus,CancelStatus' +
+      '&$expand=DocumentLines($select=LineNum,ItemCode,ItemDescription,Quantity,RemainingOpenQuantity,WarehouseCode)'
+  );
 
-  const res = await client.get(url);
   if (res.status === 404) return null;
   if (res.status < 200 || res.status >= 300) {
     const e = new Error(errMsg(res, 'ดึง PO จาก SAP ไม่สำเร็จ'));
@@ -23,23 +32,27 @@ export async function fetchPurchaseOrderFromSap(session, docEntry) {
 
 export async function createGoodsReceiptPo(session, po, body) {
   const client = createSapClient(session);
-  const whsDefault = body.warehouse || '';
+  const whsDefault = (body.warehouse || '').trim();
   const lines = [];
 
   for (const l of body.lines || []) {
-    const qty = Number(l.receivedQty);
+    const qty = Number(l.receivedQty ?? l.quantity);
     if (!(qty > 0)) continue;
 
-    const row = {
-      BaseType: 22,
-      BaseEntry: Number(po.docEntry),
-      BaseLine: Number(l.lineNum),
-      Quantity: qty
-    };
+    const extra = l.isExtra === true || Number(l.lineNum) < 0;
+    const whs = (l.warehouseCode || whsDefault || '').trim();
+    const row = { Quantity: qty };
 
-    const whs = l.warehouseCode || whsDefault;
+    if (extra) {
+      row.ItemCode = (l.itemCode || '').trim();
+      if (!row.ItemCode) continue;
+    } else {
+      row.BaseType = 22;
+      row.BaseEntry = Number(po.docEntry);
+      row.BaseLine = Number(l.lineNum);
+    }
+
     if (whs) row.WarehouseCode = whs;
-
     if (l.batchNo) {
       row.BatchNumbers = [{ BatchNumber: String(l.batchNo), Quantity: qty }];
     }
@@ -57,7 +70,8 @@ export async function createGoodsReceiptPo(session, po, body) {
     CardCode: po.cardCode,
     DocumentLines: lines
   };
-  if (body.receiveDate) payload.DocDate = body.receiveDate;
+  const d = toSapDate(body.receiveDate);
+  if (d) payload.DocDate = d;
   if (body.deliveryNote) payload.NumAtCard = body.deliveryNote;
   if (body.comments) payload.Comments = body.comments;
 

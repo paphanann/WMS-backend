@@ -2,6 +2,8 @@ import express from 'express';
 import cors from 'cors';
 import { checkDatabase } from './config/database.js';
 import authRoutes from './routes/auth.js';
+import warehousesRoutes from './routes/warehouses.js';
+import productsRoutes from './routes/products.js';
 import { registerPurchaseOrderRoutes } from './routes/purchase_orders_route.js';
 
 const app = express();
@@ -32,6 +34,8 @@ app.get('/api/health', async (req, res) => {
 });
 
 app.use('/api/auth', authRoutes);
+app.use('/api/warehouses', warehousesRoutes);
+app.use('/api/products', productsRoutes);
 registerPurchaseOrderRoutes(app);
 
 export default app;

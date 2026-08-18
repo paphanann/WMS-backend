@@ -1,7 +1,7 @@
 import { getSapDatabasePool, sql } from '../config/database.js';
 
-function toIds(docEntries) {
-  return (docEntries || []).map(Number).filter((n) => !Number.isNaN(n));
+function toIds(list) {
+  return (list || []).map(Number).filter((n) => !Number.isNaN(n));
 }
 
 export async function getPurchaseOrderLines(docEntries) {
@@ -9,10 +9,14 @@ export async function getPurchaseOrderLines(docEntries) {
   if (!ids.length) return new Map();
 
   const result = await getSapDatabasePool().request().query(`
-    SELECT DocEntry, LineNum, ItemCode, Dscription, Quantity, OpenQty, WhsCode, Price, LineTotal, unitMsr
-    FROM POR1
-    WHERE DocEntry IN (${ids.join(',')})
-    ORDER BY DocEntry, LineNum
+    SELECT
+      T0.DocEntry, T0.LineNum, T0.ItemCode, T0.Dscription,
+      T0.Quantity, T0.OpenQty, T0.WhsCode, T1.WhsName,
+      T0.Price, T0.LineTotal, T0.unitMsr
+    FROM POR1 T0
+    LEFT JOIN OWHS T1 ON T0.WhsCode = T1.WhsCode
+    WHERE T0.DocEntry IN (${ids.join(',')})
+    ORDER BY T0.DocEntry, T0.LineNum
   `);
 
   const map = new Map();
@@ -24,18 +28,39 @@ export async function getPurchaseOrderLines(docEntries) {
   return map;
 }
 
-export async function getOpenLineCounts(docEntries) {
+export async function getWarehouseNameMap(codes = []) {
+  const list = [...new Set(codes.map((c) => String(c || '').trim()).filter(Boolean))];
+  if (!list.length) return new Map();
+
+  const inList = list.map((c) => `N'${c.replace(/'/g, "''")}'`).join(',');
+  const result = await getSapDatabasePool().request().query(`
+    SELECT WhsCode, WhsName FROM OWHS WHERE WhsCode IN (${inList})
+  `);
+
+  return new Map(result.recordset.map((r) => [String(r.WhsCode), String(r.WhsName || '')]));
+}
+
+export async function getPoLineStats(docEntries) {
   const ids = toIds(docEntries);
   if (!ids.length) return new Map();
 
   const result = await getSapDatabasePool().request().query(`
-    SELECT DocEntry, SUM(CASE WHEN OpenQty > 0 THEN 1 ELSE 0 END) AS OpenLineCount
+    SELECT DocEntry,
+           COUNT(*) AS OpenLineCount,
+           SUM(OpenQty) AS TotalQty
     FROM POR1
-    WHERE DocEntry IN (${ids.join(',')})
+    WHERE DocEntry IN (${ids.join(',')}) AND LineStatus = 'O'
     GROUP BY DocEntry
   `);
 
-  return new Map(result.recordset.map((r) => [Number(r.DocEntry), Number(r.OpenLineCount || 0)]));
+  const map = new Map();
+  for (const r of result.recordset) {
+    map.set(Number(r.DocEntry), {
+      openLineCount: Number(r.OpenLineCount || 0),
+      totalQty: Number(r.TotalQty || 0)
+    });
+  }
+  return map;
 }
 
 export async function getUserPurchaseOrders(username, openOnly = true) {
@@ -50,7 +75,6 @@ export async function getUserPurchaseOrders(username, openOnly = true) {
       ${openOnly ? "AND T0.DocStatus = 'O'" : ''}
       ORDER BY T0.DocEntry DESC
     `);
-
   return result.recordset;
 }
 
@@ -60,9 +84,7 @@ export async function getPurchaseOrderHeader(docEntry) {
     .input('docEntry', sql.Int, Number(docEntry))
     .query(`
       SELECT DocEntry, DocNum, CardCode, CardName, DocDate, DocStatus, CANCELED
-      FROM OPOR
-      WHERE DocEntry = @docEntry
+      FROM OPOR WHERE DocEntry = @docEntry
     `);
-
   return result.recordset[0] || null;
 }
